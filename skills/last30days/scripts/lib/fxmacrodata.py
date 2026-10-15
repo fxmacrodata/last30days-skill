@@ -293,8 +293,14 @@ def _get_json(url: str, api_key: str | None) -> dict[str, Any]:
             if api_key:
                 headers["X-API-Key"] = api_key
             data = http.get(url, headers=headers, timeout=20, retries=2)
+            # Both endpoints wrap their rows in a ``data`` list. Anything else
+            # (an error object, a changed schema) must surface as a source
+            # error rather than parse as zero rows, and is never cached.
             if not isinstance(data, dict):
                 raise ValueError(f"unexpected FXMacroData response shape: {type(data).__name__}")
+            if not isinstance(data.get("data"), list):
+                detail = data.get("detail") or data.get("error") or f"data is {type(data.get('data')).__name__}"
+                raise ValueError(f"unexpected FXMacroData response shape: {detail}")
             _RESPONSE_CACHE[url] = data
         return _RESPONSE_CACHE[url]
 
@@ -418,6 +424,16 @@ def _schedule_text(row: dict[str, Any]) -> str:
     return str(row.get("announcement_datetime_local") or _utc_minute(row.get("announcement_datetime")) or "")
 
 
+def event_key(ccy: str, slug: str, kind: str, when: Any) -> str:
+    """Identity of one release event, independent of its citation URL.
+
+    Publishers reuse one URL for many events (a calendar page lists every
+    scheduled release; a series page serves each new print), so fusion keys
+    FXMacroData items on this instead of the URL.
+    """
+    return f"{ccy}:{slug}:{kind}:{when}"
+
+
 def _docs_url(ccy: str, slug: str) -> str:
     return f"{DOCS_BASE}/{ccy.lower()}/{slug}"
 
@@ -454,6 +470,7 @@ def _release_item(row: dict[str, Any], score: float) -> dict[str, Any]:
         "relevance": round(score, 2),
         "why_relevant": f"Official {ccy} release published in the window",
         "metadata": {
+            "event_key": event_key(ccy, slug, "release", row["_published_date"]),
             "kind": "release",
             "currency": ccy,
             "indicator": slug,
@@ -490,6 +507,10 @@ def _scheduled_item(row: dict[str, Any], score: float) -> dict[str, Any]:
         "relevance": round(score, 2),
         "why_relevant": f"Scheduled {ccy} release in the next {UPCOMING_DAYS} days",
         "metadata": {
+            "event_key": event_key(
+                ccy, slug, "scheduled",
+                row.get("announcement_datetime_utc") or row.get("announcement_datetime"),
+            ),
             "kind": "scheduled",
             "currency": ccy,
             "indicator": slug,

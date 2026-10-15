@@ -264,6 +264,26 @@ def test_unexpected_shape_is_an_error(monkeypatch):
     assert "unexpected FXMacroData response shape" in result["error"]
 
 
+@pytest.mark.parametrize("payload, message", [
+    ({"currency": "USD", "data": {"inflation": {}}}, "data is dict"),
+    ({"detail": "Unsupported currency (USD)"}, "Unsupported currency (USD)"),
+])
+def test_malformed_payload_is_an_error_and_not_cached(monkeypatch, payload, message):
+    calls = []
+
+    def malformed(url, headers=None, **kwargs):
+        calls.append(url)
+        return payload
+
+    monkeypatch.setattr(fxmacrodata.http, "get", malformed)
+    result = _search("US inflation")
+    assert result["releases"] == []
+    assert "unexpected FXMacroData response shape" in result["error"]
+    assert message in result["error"]
+    _search("US inflation")
+    assert len(calls) == 2  # the bad response was not cached
+
+
 # --- parsing and ranking -----------------------------------------------------
 
 
@@ -326,6 +346,49 @@ def test_normalize_keeps_releases_and_undated_scheduled_items(monkeypatch):
     assert release.engagement == {}
     assert release.container == "USD"
     assert release.date_confidence == "high"
+
+
+def _same_url_payloads():
+    """Several scheduled events on one calendar URL, and a release whose next
+    event falls back to the same per-indicator URL."""
+    release = _indicator("policy_rate", "Fed Funds Target Rate", "2026-09-17T18:00:00")
+    release["source_url"] = release["latest"]["source_url"] = None
+    latest = {"currency": "USD", "data": [release]}
+    calendar = {"currency": "USD", "data": [
+        _calendar_row("policy_rate", "Fed Funds Target Rate", "2026-10-28T18:00:00", tier=1),
+        _calendar_row("inflation", "CPI Inflation", "2026-10-20T12:30:00", tier=1),
+        _calendar_row("retail_sales", "Retail Sales", "2026-10-16T12:30:00", tier=1),
+        _calendar_row("gdp", "GDP", "2026-10-27T12:30:00", tier=1),
+    ]}
+    for row in calendar["data"]:
+        row["source_url"] = None
+        if row["release"] != "policy_rate":
+            row["source_url"] = "https://example.gov/calendar"
+    return {"usd": (latest, calendar)}
+
+
+def test_events_sharing_a_url_stay_distinct_through_fusion(monkeypatch):
+    from lib import fusion
+
+    _install(monkeypatch, FakeApi(_same_url_payloads()))
+    items = fxmacrodata.parse_fxmacrodata_response(_search("US economy"), query="US economy")
+    urls = [i["url"] for i in items]
+    assert urls.count("https://example.gov/calendar") == 3
+    policy = [i for i in items if i["metadata"]["indicator"] == "policy_rate"]
+    assert {i["metadata"]["kind"] for i in policy} == {"release", "scheduled"}
+    assert len({i["url"] for i in policy}) == 1  # both on the fallback URL
+
+    normalized = normalize.normalize_source_items("fxmacrodata", items, FROM, TO)
+    assert len(normalized) == 5
+    assert len(fusion.collapse_duplicate_urls(list(normalized))) == 5
+
+    fused = fusion.weighted_rrf(
+        {("primary", "fxmacrodata"): normalized}, _plan(["fxmacrodata"]),
+        pool_limit=40, range_from=FROM, range_to=TO,
+    )
+    assert len(fused) == 5
+    # Citations still point at the publisher's page.
+    assert sorted(c.url for c in fused).count("https://example.gov/calendar") == 3
 
 
 # --- planner -------------------------------------------------------------------
