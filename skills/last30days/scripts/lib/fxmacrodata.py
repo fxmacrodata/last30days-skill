@@ -28,6 +28,7 @@ and sends no request in that case.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import re
 import threading
 import urllib.parse
@@ -273,8 +274,8 @@ def _utc_minute(epoch: Any) -> str | None:
 
 # The pipeline calls a source once per subquery and these payloads do not
 # depend on the subquery, so identical URLs are fetched once per process.
-_RESPONSE_CACHE: dict[str, dict[str, Any]] = {}
-_URL_LOCKS: dict[str, threading.Lock] = {}
+_RESPONSE_CACHE: dict[tuple[str, bytes | None], dict[str, Any]] = {}
+_URL_LOCKS: dict[tuple[str, bytes | None], threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
 
 
@@ -285,24 +286,34 @@ def clear_cache() -> None:
 
 
 def _get_json(url: str, api_key: str | None) -> dict[str, Any]:
+    token = (api_key or "").strip()
+    if any(char.isspace() or not char.isprintable() for char in token):
+        raise ValueError("FXMacroData API key contains whitespace or control characters")
+    # A paid response must never satisfy a different credential or keyless
+    # request. Keep the credential itself out of cache/lock dictionary keys.
+    cache_key = (url, hashlib.sha256(token.encode("utf-8")).digest() if token else None)
     with _LOCKS_GUARD:
-        lock = _URL_LOCKS.setdefault(url, threading.Lock())
+        lock = _URL_LOCKS.setdefault(cache_key, threading.Lock())
     with lock:
-        if url not in _RESPONSE_CACHE:
+        if cache_key not in _RESPONSE_CACHE:
             headers = {"User-Agent": _UA, "Accept": "application/json"}
-            if api_key:
-                headers["X-API-Key"] = api_key
-            data = http.get(url, headers=headers, timeout=20, retries=2)
+            if token:
+                headers["X-API-Key"] = token
+            try:
+                data = http.get(url, headers=headers, timeout=20, retries=2)
+            except Exception:
+                raise ValueError("FXMacroData request failed") from None
             # Both endpoints wrap their rows in a ``data`` list. Anything else
             # (an error object, a changed schema) must surface as a source
             # error rather than parse as zero rows, and is never cached.
             if not isinstance(data, dict):
                 raise ValueError(f"unexpected FXMacroData response shape: {type(data).__name__}")
             if not isinstance(data.get("data"), list):
-                detail = data.get("detail") or data.get("error") or f"data is {type(data.get('data')).__name__}"
-                raise ValueError(f"unexpected FXMacroData response shape: {detail}")
-            _RESPONSE_CACHE[url] = data
-        return _RESPONSE_CACHE[url]
+                raise ValueError(f"unexpected FXMacroData response shape: data is {type(data.get('data')).__name__}")
+            if data.get("error") or data.get("detail") or not all(isinstance(row, dict) for row in data["data"]):
+                raise ValueError("unexpected FXMacroData response shape")
+            _RESPONSE_CACHE[cache_key] = data
+        return _RESPONSE_CACHE[cache_key]
 
 
 def search_fxmacrodata(
@@ -368,8 +379,8 @@ def search_fxmacrodata(
         next_release: dict[str, dict[str, Any]] = {}
         for row in calendar_rows:
             slug = str(row.get("release") or "")
-            tier = 1 if row.get("top_tier_for_currency") else row.get("market_tier")
-            if slug and isinstance(tier, int):
+            tier = 1 if row.get("top_tier_for_currency") is True else row.get("market_tier")
+            if slug and type(tier) is int and tier >= 1:
                 tiers[slug] = min(tier, tiers.get(slug, tier))
             when = row.get("announcement_datetime")
             if want_upcoming and slug and isinstance(when, int) and when > now_epoch:
@@ -414,7 +425,7 @@ def _fmt(value: Any) -> str:
 
 
 def _is_headline(slug: str, tier: Any) -> bool:
-    return tier == 1 if isinstance(tier, int) else slug in _HEADLINE_INDICATORS
+    return tier == 1 if type(tier) is int else slug in _HEADLINE_INDICATORS
 
 
 def _schedule_text(row: dict[str, Any]) -> str:
