@@ -82,6 +82,8 @@ PLAN_EOF
 
 For any additional outer targeting flag, capture its value through a quoted heredoc and add it to `MAIN_TARGETING` with a quoted variable expansion. Omit unresolved flags. Never paste a topic, handle, subreddit, or fetched context directly into shell command words. The quoted heredocs keep shell-active text literal; `json.tool` rejects malformed peer JSON before the research run.
 
+The cleanup trap removes both plan files after research. For a later HTML export, follow `save-html-brief.md` with `--cached-report` and the original topic. Do not replay the removed plan paths. The cache preserves every entity's report and targeting; if the cache expires, recreate the plans before running research again.
+
 ### Without host web search
 
 On a Grok Bot with the official X connector, follow `grok-bot-x.md` to fetch and write one envelope per entity before this command. Replace `COMPETITORS_PLAN_JSON` with JSON keyed by every entity name, including the main one, containing each envelope's absolute path as `x_posts`. When an envelope has `from` or `mention` calls, its plan entry must also contain the matching `x_handle`; when it has `related` calls, include their handles as an `x_related` array. For example, `{"Main Brand":{"x_posts":"/tmp/main.json","x_handle":"mainbrand"},"Peer Brand":{"x_posts":"/tmp/peer.json","x_handle":"peerbrand"}}`. Set `TOPIC_A_HANDLE` below to the main entity's matching handle and `TOPIC_A_RELATED` to its comma-separated related handles, or leave them empty when no handles are known. The main plan entry validates its envelope, while the outer flags target its pipeline run. With no known handle, fetch only a topic call and omit handle fields. Run the command in the same shell as the envelope setup so its parent cleanup trap remains active. Other hosts use this command without a competitors plan.
@@ -144,7 +146,7 @@ Voice contract LAWs 1, 3, 5 apply to comparisons unchanged (omit unnecessary tra
 
 **Required comparison structure (match the April 9 exemplar):**
 
-```
+````
 🌐 last30days v{VERSION} · synced {YYYY-MM-DD}
 
 # {TOPIC_A} vs {TOPIC_B} [vs {TOPIC_C}]: What the Community Says (/Last30Days)
@@ -204,18 +206,21 @@ Voice contract LAWs 1, 3, 5 apply to comparisons unchanged (omit unnecessary tra
 
 [One paragraph. Name the combination pattern the community is converging on. Cite specific sources (`per @handle`, `per r/sub`, `per {channel} on YouTube`). This is the synthesis moment of the piece. If the data does not support an emerging-stack observation, write "No emerging stack pattern has crystallized in the research window yet" rather than fabricating one.]
 
+```text
 ---
 ✅ All agents reported back!
 ├─ 🟠 Reddit: ...
 ├─ 🔵 X: ...
 (engine footer passed through when emitted, LAW 5; include its saved-file pointer only if emitted)
+---
+```
 
 I've compared {TOPIC_A} vs {TOPIC_B} [vs ...] using the latest community data. Some things you could ask:
 - [follow-up referencing comparison specifics, e.g. "Deep dive into {Entity} alone with /last30days {Entity}"]
 - [follow-up referencing a specific claim from the Strengths/Weaknesses block]
 - [follow-up on a specific dimension from the Head-to-Head table]
 - [follow-up on the emerging-stack combination pattern]
-```
+````
 
 **Do NOT:**
 - Use `What I learned:` prose label (that is general-query voice)
